@@ -17,6 +17,86 @@ function _resolve(deps) {
 }
 
 /**
+ * Dismiss any TradingView modal / confirmation dialog that may appear during
+ * replay operations.  The most common one is "Continue your last replay?" which
+ * blocks selectDate() from running if left open.
+ *
+ * IMPORTANT: this function MUST receive `evaluate` as an explicit parameter.
+ * It cannot use the module-level `_evaluate` alias directly because the function
+ * is called from within scopes that may use a dependency-injected stub (tests).
+ *
+ * Strategy: find any visible dialog/modal overlay and click its primary dismiss
+ * button.  We don't try to guess *which* button is "right" — after this runs,
+ * start() immediately calls selectDate(ts) which sets the exact position we want,
+ * making the Continue/Start-over distinction irrelevant.
+ */
+async function dismissReplayModal(evaluate) {
+  try {
+    const dismissed = await evaluate(`
+      (function() {
+        // ── 1. Look for an explicit modal / dialog container ─────────────────
+        var dialog =
+          document.querySelector('[role="dialog"]') ||
+          document.querySelector('[class*="modal"]') ||
+          document.querySelector('[class*="dialog"]') ||
+          document.querySelector('[class*="popup"]') ||
+          document.querySelector('[class*="confirm"]') ||
+          document.querySelector('[class*="overlay"]');
+
+        if (dialog && dialog.offsetParent !== null) {
+          // Click the first *visible* button inside the dialog
+          var btns = dialog.querySelectorAll('button');
+          for (var i = 0; i < btns.length; i++) {
+            if (btns[i].offsetParent !== null && !btns[i].disabled) {
+              btns[i].click();
+              return 'dialog:' + (btns[i].textContent || '').trim().substring(0, 40);
+            }
+          }
+        }
+
+        // ── 2. Fall back: scan all visible buttons for replay-modal keywords ─
+        // Covers: "Continue", "Continue replay", "Yes", "Ok",
+        //         "Start over", "New session", "No" — anything that dismisses.
+        var KEYWORDS = [
+          'continue', 'yes', 'ok', 'start over', 'new session',
+          'start new', 'no', 'cancel', 'close', 'got it',
+        ];
+        var allBtns = document.querySelectorAll('button');
+        for (var j = 0; j < allBtns.length; j++) {
+          var btn = allBtns[j];
+          if (btn.offsetParent === null || btn.disabled) continue;
+          var text = btn.textContent.trim().toLowerCase();
+          // Only click buttons that look like they belong to a replay prompt.
+          // Guard: the button's text must match AND a nearby ancestor must
+          // contain replay-related text (avoids accidentally clicking chart btns).
+          var ancestor = btn.closest('[class*="modal"], [class*="dialog"], [class*="popup"], [class*="confirm"], [role="dialog"]');
+          if (!ancestor) {
+            // Looser check: does the page have any visible overlay at all?
+            var anyOverlay = document.querySelector('[class*="modal"],[class*="dialog"],[class*="popup"]');
+            if (!anyOverlay || anyOverlay.offsetParent === null) continue;
+          }
+          for (var k = 0; k < KEYWORDS.length; k++) {
+            if (text.indexOf(KEYWORDS[k]) !== -1) {
+              btn.click();
+              return 'keyword:' + text.substring(0, 40);
+            }
+          }
+        }
+
+        return null; // nothing to dismiss
+      })()
+    `);
+
+    if (dismissed) {
+      // Give TV time to animate the modal away before the next CDP call
+      await new Promise(r => setTimeout(r, 400));
+    }
+  } catch {
+    // Never throw — modal dismissal is best-effort
+  }
+}
+
+/**
  * Convert date + time in a specific IANA timezone to a UTC millisecond timestamp.
  * Uses Intl.DateTimeFormat to resolve the correct UTC offset for the given timezone,
  * accounting for DST transitions automatically.
@@ -61,10 +141,19 @@ export function dateTimeToTimestamp(dateStr, timeStr, timezone) {
 export async function start({ date, time, _deps } = {}) {
   const { evaluate, getReplayApi } = _resolve(_deps);
   const rp = await getReplayApi();
+
+  // ── Dismiss any stale modal FIRST, before doing anything else ─────────────
+  // "Continue your last replay?" appears as soon as showReplayToolbar() is called
+  // and must be cleared before selectDate() or selectFirstAvailableDate() can work.
+  await dismissReplayModal(evaluate);
+
   const available = await evaluate(wv(`${rp}.isReplayAvailable()`));
   if (!available) throw new Error('Replay is not available for the current symbol/timeframe');
 
   await evaluate(`${rp}.showReplayToolbar()`);
+
+  // Show the toolbar may trigger the modal — dismiss again
+  await dismissReplayModal(evaluate);
 
   // Read the chart's configured timezone (e.g. "America/New_York").
   // TradingView's date picker interprets times in this timezone, so we do the same.
@@ -75,10 +164,6 @@ export async function start({ date, time, _deps } = {}) {
     );
   }
 
-  // selectDate() is async — it calls enableReplayMode() then _onPointSelected()
-  // which initializes the server-side replay session. Must be awaited inside the
-  // page context, otherwise the promise is fire-and-forget and replay state says
-  // "started" but stepping doesn't work (issue #26).
   if (date) {
     // Validate time format if provided
     if (time && !/^\d{2}:\d{2}(:\d{2})?$/.test(time)) {
@@ -112,11 +197,11 @@ export async function start({ date, time, _deps } = {}) {
   }
 
   // Poll until replay is fully initialized: isReplayStarted AND currentDate is set.
-  // selectDate()'s promise resolves before the data series is ready, so we need
-  // to wait for currentDate to become non-null before stepping will work.
   let started = false;
   let currentDate = null;
   for (let i = 0; i < 30; i++) {
+    // Dismiss modal on every poll iteration — it can appear mid-initialization
+    await dismissReplayModal(evaluate);
     started = await evaluate(wv(`${rp}.isReplayStarted()`));
     currentDate = await evaluate(wv(`${rp}.currentDate()`));
     if (started && currentDate !== null) break;
@@ -128,7 +213,8 @@ export async function start({ date, time, _deps } = {}) {
     throw new Error('Replay failed to start. The selected date may not have data for this timeframe. Try a more recent date or a higher timeframe (e.g., Daily).');
   }
 
-  await dismissReplayModal();
+  // Final dismiss after startup completes
+  await dismissReplayModal(evaluate);
 
   return {
     success: true, replay_started: true,
@@ -139,40 +225,29 @@ export async function start({ date, time, _deps } = {}) {
   };
 }
 
-async function dismissReplayModal() {
-  try {
-    const result = await evaluate(`
-      (function() {
-        var buttons = document.querySelectorAll('button');
-        for (var i = 0; i < buttons.length; i++) {
-          var text = buttons[i].textContent.trim().toLowerCase();
-          if (text.indexOf('continue') !== -1 || text.indexOf('replay') !== -1) {
-            buttons[i].click();
-            return true;
-          }
-        }
-        return false;
-      })()
-    `);
-    if (result) await new Promise(r => setTimeout(r, 300));
-  } catch {}
-}
-
 export async function step({ _deps } = {}) {
   const { evaluate, getReplayApi } = _resolve(_deps);
+
+  // Dismiss any modal that may be blocking the UI before we try to step
+  await dismissReplayModal(evaluate);
+
   const rp = await getReplayApi();
   const started = await evaluate(wv(`${rp}.isReplayStarted()`));
   if (!started) throw new Error('Replay is not started. Use replay_start first.');
+
   const before = await evaluate(wv(`${rp}.currentDate()`));
   await evaluate(`${rp}.doStep()`);
   await new Promise(r => setTimeout(r, 500));
+
   let currentDate = before;
   for (let i = 0; i < 12; i++) {
+    // Dismiss any modal that appeared after stepping (e.g., end-of-data prompts)
+    await dismissReplayModal(evaluate);
     currentDate = await evaluate(wv(`${rp}.currentDate()`));
     if (currentDate !== before) break;
     await new Promise(r => setTimeout(r, 250));
   }
-  await dismissReplayModal();
+
   return { success: true, action: 'step', current_date: currentDate };
 }
 
@@ -182,21 +257,34 @@ export async function autoplay({ speed, _deps } = {}) {
     throw new Error(`Invalid autoplay delay ${speed}ms. Valid values: ${VALID_AUTOPLAY_DELAYS.join(', ')}`);
 
   const { evaluate, getReplayApi } = _resolve(_deps);
+
+  // Dismiss any modal first — autoplay can fail silently if a dialog is open
+  await dismissReplayModal(evaluate);
+
   const rp = await getReplayApi();
   const started = await evaluate(wv(`${rp}.isReplayStarted()`));
   if (!started) throw new Error('Replay is not started. Use replay_start first.');
+
   if (speed > 0) {
     await evaluate(`${rp}.changeAutoplayDelay(${speed})`);
   }
   await evaluate(`${rp}.toggleAutoplay()`);
+
   const isAutoplay = await evaluate(wv(`${rp}.isAutoplayStarted()`));
   const currentDelay = await evaluate(wv(`${rp}.autoplayDelay()`));
-  await dismissReplayModal();
+
+  // Dismiss anything that opened as a result of toggling autoplay
+  await dismissReplayModal(evaluate);
+
   return { success: true, autoplay_active: !!isAutoplay, delay_ms: currentDelay };
 }
 
 export async function stop({ _deps } = {}) {
   const { evaluate, getReplayApi } = _resolve(_deps);
+
+  // Dismiss modal first — stop may be called from a confused state
+  await dismissReplayModal(evaluate);
+
   const rp = await getReplayApi();
   const started = await evaluate(wv(`${rp}.isReplayStarted()`));
   if (!started) {
@@ -208,6 +296,10 @@ export async function stop({ _deps } = {}) {
 
 export async function trade({ action, _deps }) {
   const { evaluate, getReplayApi } = _resolve(_deps);
+
+  // Dismiss modal before trading — dialog can block trade execution
+  await dismissReplayModal(evaluate);
+
   const rp = await getReplayApi();
   const started = await evaluate(wv(`${rp}.isReplayStarted()`));
   if (!started) throw new Error('Replay is not started. Use replay_start first.');
@@ -224,6 +316,11 @@ export async function trade({ action, _deps }) {
 
 export async function status({ _deps } = {}) {
   const { evaluate, getReplayApi } = _resolve(_deps);
+
+  // Dismiss modal before reading status — status is often called to diagnose
+  // problems, and a stale modal is the most common cause of frozen state
+  await dismissReplayModal(evaluate);
+
   const rp = await getReplayApi();
   const st = await evaluate(`
     (function() {

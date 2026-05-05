@@ -4,142 +4,116 @@
 import { evaluate as _evaluate, getChartApi as _getChartApi, safeString, requireFinite } from '../connection.js';
 
 function _resolve(deps) {
-  return { evaluate: deps?.evaluate || _evaluate, getChartApi: deps?.getChartApi || _getChartApi };
-}
-
-function calcMetrics({ entry, stop, target, direction, accountSize, riskPercent, lotSize, leverage }) {
-  const riskDist = Math.abs(entry - stop);
-  const rewardDist = Math.abs(target - entry);
-  const riskReward = riskDist > 0 ? parseFloat((rewardDist / riskDist).toFixed(2)) : 0;
-  const riskAmt = (accountSize * riskPercent) / 100;
-  const rewardAmt = parseFloat((riskAmt * riskReward).toFixed(2));
   return {
-    risk_distance: riskDist,
-    reward_distance: rewardDist,
-    risk_reward_ratio: riskReward,
-    risk_amount: riskAmt,
-    reward_amount: rewardAmt,
+    evaluate: deps?.evaluate || _evaluate,
+    getChartApi: deps?.getChartApi || _getChartApi,
   };
-}
-
-function barTime(deps) {
-  return deps?.barTime || 0;
-}
-
-async function getChartTimezone(deps) {
-  const { evaluate, getChartApi } = _resolve(deps);
-  const apiPath = await getChartApi();
-  try {
-    return await evaluate(`${apiPath}.getTimezone()`) || 'UTC';
-  } catch {
-    return 'UTC';
-  }
-}
-
-async function getBarTime(deps) {
-  if (deps?.barTime) return deps.barTime;
-  const { evaluate, getChartApi } = _resolve(deps);
-  const apiPath = await getChartApi();
-  const rp = await evaluate(`window.TradingViewApi._replayApiWV && window.TradingViewApi._replayApiWV.value()`);
-  if (rp && rp.isReplayStarted && rp.isReplayStarted()) {
-    const cd = rp.currentDate();
-    if (cd) return cd;
-  }
-  try {
-    const vr = await evaluate(`${apiPath}.getVisibleRange()`);
-    return (vr && vr.to) ? vr.to : 0;
-  } catch {
-    return 0;
-  }
 }
 
 export { dateTimeToTimestamp } from './replay.js';
 
-async function drawManualFallback({ entry, stop, target, direction, barTime: bt, deps }) {
-  const { evaluate, getChartApi } = _resolve(deps);
-  const apiPath = await getChartApi();
-  const ids = [];
+// ── getBarTime ────────────────────────────────────────────────────────────────
+//
+// Returns the Unix timestamp (SECONDS) to anchor the position box to.
+//
+// WHY this must run entirely inside CDP (inside the evaluate string):
+//
+//   connection.js calls `evaluate` with `returnByValue: true`.  When the CDP
+//   result is a primitive (number, boolean, string) it comes back correctly.
+//   But TradingView's internal objects (replayApi, WatchedValue wrappers, etc.)
+//   are non-serialisable — CDP returns `undefined` for them.  Any attempt to
+//   call methods on the Node.js side (e.g. `rp.currentDate()`) therefore throws
+//   "Cannot read property of undefined", silently swallowed by a caller's
+//   try-catch.
+//
+//   The fix: keep EVERYTHING in the browser context, only return the final
+//   primitive number we need.
+//
+// Priority order:
+//   1. In replay mode  → replayApi.currentDate()   (authoritative replay position)
+//   2. Not in replay   → bars.lastIndex() bar time  (current live bar)
+//
+// The replay path uses `window.TradingViewApi._replayApi` (the simple property,
+// not the WatchedValue wrapper `_replayApiWV`) because `_replayApi` exposes
+// the methods directly without needing to call .value() first on the outer
+// wrapper — though we still unwrap WatchedValue returns from the API methods
+// themselves (isReplayStarted / currentDate are often WatchedValue instances).
 
-  const isLong = direction === 'long';
-  const zoneColor = isLong ? 'rgba(0,180,0,0.15)' : 'rgba(180,0,0,0.15)';
-  const zoneBorder = isLong ? '#00b400' : '#b40000';
-  const entryColor = isLong ? '#00b400' : '#b40000';
+async function getBarTime(evaluate) {
+  const t = await evaluate(`
+    (function() {
+      // ── Attempt 1: replay mode — use the replay API's current position ──────
+      // This is the authoritative timestamp the user navigated to via replay_start.
+      // It correctly reflects the chart timezone conversion done in start().
+      try {
+        var rp = window.TradingViewApi && window.TradingViewApi._replayApi;
+        if (rp) {
+          // isReplayStarted() may itself be a WatchedValue — unwrap it
+          var started = typeof rp.isReplayStarted === 'function' ? rp.isReplayStarted() : false;
+          if (started && typeof started === 'object' && typeof started.value === 'function') {
+            started = started.value();
+          }
 
-  const rectShape = isLong ? 'rectangle' : 'rectangle';
-  const profitShape = isLong ? 'rectangle' : 'rectangle';
+          if (started) {
+            // currentDate() is also sometimes a WatchedValue
+            var cd = typeof rp.currentDate === 'function' ? rp.currentDate() : null;
+            if (cd && typeof cd === 'object' && typeof cd.value === 'function') {
+              cd = cd.value();
+            }
+            // Must be a positive number (unix seconds)
+            if (typeof cd === 'number' && cd > 0) return cd;
+          }
+        }
+      } catch (e) {
+        // _replayApi not available or replay not initialised — fall through
+      }
 
-  const entryTop = isLong ? target : entry;
-  const entryBot = isLong ? entry : stop;
-  const stopTop = isLong ? entry : target;
-  const stopBot = isLong ? stop : entry;
+      // ── Attempt 2: not in replay — use the last bar's open timestamp ─────────
+      try {
+        var bars = window.TradingViewApi
+          ._activeChartWidgetWV.value()
+          ._chartWidget.model().mainSeries().bars();
+        var v = bars.valueAt(bars.lastIndex());
+        if (v && typeof v[0] === 'number' && v[0] > 0) return v[0];
+      } catch (e) {}
 
-  async function makeShape(shape, point, point2, ovr) {
-    const overridesStr = JSON.stringify(ovr || {});
-    const textStr = JSON.stringify(ovr?.text || '');
-    const p1time = requireFinite(point.time, 'point.time');
-    const p1price = requireFinite(point.price, 'point.price');
-    const before = await evaluate(`${apiPath}.getAllShapes().map(function(s){return s.id;})`);
-    if (point2) {
-      const p2time = requireFinite(point2.time, 'point2.time');
-      const p2price = requireFinite(point2.price, 'point2.price');
-      await evaluate(`${apiPath}.createMultipointShape([{time:${p1time},price:${p1price}},{time:${p2time},price:${p2price}}],{shape:${safeString(shape)},overrides:${overridesStr},text:${textStr}})`);
-    } else {
-      await evaluate(`${apiPath}.createShape({time:${p1time},price:${p1price}},{shape:${safeString(shape)},overrides:${overridesStr},text:${textStr}})`);
-    }
-    await new Promise(r => setTimeout(r, 150));
-    const after = await evaluate(`${apiPath}.getAllShapes().map(function(s){return s.id;})`);
-    return (after || []).find(id => !(before || []).includes(id)) || null;
-  }
-
-  const t = bt || 0;
-
-  const profitRect = await makeShape('rectangle', { time: t, price: entryTop }, { time: t, price: entryBot }, {
-    backColor: zoneColor, borderColor: zoneBorder, borderWidth: 1, lineWidth: 1,
-  });
-  if (profitRect) ids.push(profitRect);
-
-  const stopRect = await makeShape('rectangle', { time: t, price: stopTop }, { time: t, price: stopBot }, {
-    backColor: 'rgba(255,60,60,0.15)', borderColor: '#ff3c3c', borderWidth: 1, lineWidth: 1,
-  });
-  if (stopRect) ids.push(stopRect);
-
-  const entryLine = await makeShape('horizontal_line', { time: t, price: entry }, undefined, {
-    color: entryColor, linewidth: 1, linestyle: 2,
-  });
-  if (entryLine) ids.push(entryLine);
-
-  const targetLine = await makeShape('horizontal_line', { time: t, price: target }, undefined, {
-    color: '#00b400', linewidth: 1, linestyle: 0,
-  });
-  if (targetLine) ids.push(targetLine);
-
-  const stopLine = await makeShape('horizontal_line', { time: t, price: stop }, undefined, {
-    color: '#ff3c3c', linewidth: 1, linestyle: 0,
-  });
-  if (stopLine) ids.push(stopLine);
-
-  const rr = isLong ? ((target - entry) / (entry - stop)).toFixed(2) : ((entry - target) / (stop - entry)).toFixed(2);
-  const labelText = `${isLong ? '▲' : '▼'} ${direction.toUpperCase()} | Entry ${entry} | R:R ${rr} | Lot 1`;
-  const label = await makeShape('text', { time: t, price: entry }, undefined, {
-    text: labelText, color: entryColor, fontsize: 10,
-  });
-  if (label) ids.push(label);
-
-  return ids;
+      return null;
+    })()
+  `);
+  return t;
 }
+
+// ── calcMetrics ───────────────────────────────────────────────────────────────
+
+function calcMetrics({ entry, stop, target, direction, accountSize, riskPercent, lotSize, leverage }) {
+  const riskDist   = Math.abs(entry - stop);
+  const rewardDist = Math.abs(target - entry);
+  const rr = riskDist > 0 ? parseFloat((rewardDist / riskDist).toFixed(2)) : 0;
+  const riskAmt   = (accountSize * riskPercent) / 100;
+  const rewardAmt = parseFloat((riskAmt * rr).toFixed(2));
+  return {
+    risk_distance:     riskDist,
+    reward_distance:   rewardDist,
+    risk_reward_ratio: rr,
+    risk_amount:       riskAmt,
+    reward_amount:     rewardAmt,
+  };
+}
+
+// ── drawNativeShape ───────────────────────────────────────────────────────────
 
 async function drawNativeShape({ shapeType, entry, stop, target, accountSize, riskPercent, lotSize, leverage, barTime: bt, deps }) {
   const { evaluate, getChartApi } = _resolve(deps);
   const apiPath = await getChartApi();
-  const t = bt || (await getBarTime(deps)) || 0;
+  const t = bt || (await getBarTime(evaluate)) || 0;
 
   const overrides = {
-    profitLevel: target,
-    stopLevel: stop,
-    accountSize: accountSize || 1000,
-    risk: riskPercent || 2,
-    lotSize: lotSize || 1,
-    leverage: leverage || 1,
+    profitLevel:  target,
+    stopLevel:    stop,
+    accountSize:  accountSize || 1000,
+    risk:         riskPercent || 2,
+    lotSize:      lotSize || 1,
+    leverage:     leverage || 1,
   };
 
   const overridesStr = JSON.stringify(overrides);
@@ -159,7 +133,7 @@ async function drawNativeShape({ shapeType, entry, stop, target, accountSize, ri
     if (shapeId) return { method: 'createShape', entity_id: shapeId };
   } catch {}
 
-  // Attempt 2: createMultipointShape (3 points)
+  // Attempt 2: createMultipointShape with 3 points (entry, target, stop)
   const p2time = requireFinite(t, 'barTime');
   const p2price = requireFinite(target, 'target');
   const p3time = requireFinite(t, 'barTime');
@@ -172,7 +146,7 @@ async function drawNativeShape({ shapeType, entry, stop, target, accountSize, ri
     if (shapeId) return { method: 'createMultipointShape_3pt', entity_id: shapeId };
   } catch {}
 
-  // Attempt 3: createMultipointShape (2 points)
+  // Attempt 3: createMultipointShape with 2 points
   try {
     await evaluate(`${apiPath}.createMultipointShape([{time:${p1time},price:${p1price}},{time:${p3time},price:${p3price}}],{shape:${safeString(shapeType)},overrides:${overridesStr}})`);
     await new Promise(r => setTimeout(r, 250));
@@ -184,9 +158,84 @@ async function drawNativeShape({ shapeType, entry, stop, target, accountSize, ri
   return null;
 }
 
+// ── drawManualFallback ────────────────────────────────────────────────────────
+
+async function drawManualFallback({ entry, stop, target, direction, barTime: bt, deps }) {
+  const { evaluate, getChartApi } = _resolve(deps);
+  const apiPath = await getChartApi();
+
+  const isLong = direction === 'long';
+  const zoneColor  = isLong ? 'rgba(0,180,0,0.15)'  : 'rgba(180,0,0,0.15)';
+  const zoneBorder = isLong ? '#00b400'              : '#b40000';
+  const entryColor = isLong ? '#00b400'              : '#b40000';
+
+  const ids = [];
+
+  const makeShape = async (shape, point, point2, ovr) => {
+    const overridesStr = JSON.stringify(ovr || {});
+    const textStr = JSON.stringify(ovr?.text || '');
+    const p1time  = requireFinite(point.time,  'point.time');
+    const p1price = requireFinite(point.price, 'point.price');
+    const before = await evaluate(`${apiPath}.getAllShapes().map(function(s){return s.id;})`);
+    if (point2) {
+      const p2time  = requireFinite(point2.time,  'point2.time');
+      const p2price = requireFinite(point2.price, 'point2.price');
+      await evaluate(`${apiPath}.createMultipointShape([{time:${p1time},price:${p1price}},{time:${p2time},price:${p2price}}],{shape:${safeString(shape)},overrides:${overridesStr},text:${textStr}})`);
+    } else {
+      await evaluate(`${apiPath}.createShape({time:${p1time},price:${p1price}},{shape:${safeString(shape)},overrides:${overridesStr},text:${textStr}})`);
+    }
+    await new Promise(r => setTimeout(r, 150));
+    const after = await evaluate(`${apiPath}.getAllShapes().map(function(s){return s.id;})`);
+    const id = (after || []).find(id => !(before || []).includes(id)) || null;
+    if (id) ids.push(id);
+    return id;
+  };
+
+  const t = bt || 0;
+
+  // Profit zone rectangle
+  await makeShape('rectangle',
+    { time: t, price: isLong ? entry : target },
+    { time: t, price: isLong ? target : entry },
+    { backColor: zoneColor, borderColor: zoneBorder, borderWidth: 1, lineWidth: 1 },
+  );
+
+  // Loss zone rectangle
+  await makeShape('rectangle',
+    { time: t, price: isLong ? stop : entry },
+    { time: t, price: isLong ? entry : stop },
+    { backColor: 'rgba(255,60,60,0.15)', borderColor: '#ff3c3c', borderWidth: 1, lineWidth: 1 },
+  );
+
+  // Entry line
+  await makeShape('horizontal_line', { time: t, price: entry }, undefined,
+    { color: entryColor, linewidth: 2, linestyle: 0,
+      showLabel: true, textcolor: entryColor, text: `Entry: ${entry}`,
+      horzLabelsAlign: 'right', vertLabelsAlign: 'middle' },
+  );
+
+  // Target line
+  await makeShape('horizontal_line', { time: t, price: target }, undefined,
+    { color: zoneBorder, linewidth: 1, linestyle: 2,
+      showLabel: true, textcolor: zoneBorder, text: `Target: ${target}`,
+      horzLabelsAlign: 'right', vertLabelsAlign: 'middle' },
+  );
+
+  // Stop line
+  await makeShape('horizontal_line', { time: t, price: stop }, undefined,
+    { color: '#ff3c3c', linewidth: 1, linestyle: 2,
+      showLabel: true, textcolor: '#ff3c3c', text: `Stop: ${stop}`,
+      horzLabelsAlign: 'right', vertLabelsAlign: 'middle' },
+  );
+
+  return ids;
+}
+
+// ── PUBLIC: drawPosition ──────────────────────────────────────────────────────
+
 export async function drawPosition({ direction, entry, stop, target, accountSize, riskPercent, lotSize, leverage, _deps }) {
   const deps = _deps || {};
-  const barTime = deps.barTime || await getBarTime(deps);
+  const { evaluate } = _resolve(deps);
 
   if (direction === 'short') {
     if (stop <= entry) throw new Error('Short stop must be ABOVE entry price');
@@ -196,14 +245,17 @@ export async function drawPosition({ direction, entry, stop, target, accountSize
     if (target <= entry) throw new Error('Long target must be ABOVE entry price');
   }
 
+  // Resolve bar time — uses replay position when in replay mode
+  const barTime = await getBarTime(evaluate);
+
   const shapeType = direction === 'short' ? 'short_position' : 'long_position';
 
   const native = await drawNativeShape({
     shapeType, entry, stop, target,
     accountSize: accountSize || 1000,
     riskPercent: riskPercent || 2,
-    lotSize: lotSize || 1,
-    leverage: leverage || 1,
+    lotSize:     lotSize || 1,
+    leverage:    leverage || 1,
     barTime,
     deps,
   });
@@ -218,12 +270,12 @@ export async function drawPosition({ direction, entry, stop, target, accountSize
       entity_id: native.entity_id,
       direction,
       entry_price: entry,
-      stop_price: stop,
+      stop_price:  stop,
       target_price: target,
       account_size: accountSize || 1000,
       risk_percent: riskPercent || 2,
-      lot_size: lotSize || 1,
-      leverage: leverage || 1,
+      lot_size:     lotSize || 1,
+      leverage:     leverage || 1,
       metrics,
     };
   }
@@ -237,16 +289,18 @@ export async function drawPosition({ direction, entry, stop, target, accountSize
     entity_ids: ids,
     direction,
     entry_price: entry,
-    stop_price: stop,
+    stop_price:  stop,
     target_price: target,
     account_size: accountSize || 1000,
     risk_percent: riskPercent || 2,
-    lot_size: lotSize || 1,
-    leverage: leverage || 1,
+    lot_size:     lotSize || 1,
+    leverage:     leverage || 1,
     note: 'Native long_position/short_position shape was not available. Manual fallback rendered.',
     metrics,
   };
 }
+
+// ── PUBLIC: inspectShape ──────────────────────────────────────────────────────
 
 export async function inspectShape({ entity_id }) {
   const { evaluate, getChartApi } = _resolve({});
@@ -258,12 +312,11 @@ export async function inspectShape({ entity_id }) {
       var props = { entity_id: eid };
       var shape = api.getShapeById(eid);
       if (!shape) return { error: 'Shape not found: ' + eid };
-      try { for (var key in shape) { if (typeof shape[key] === 'function') props.methods.push(key); } } catch(e) {}
+      try { for (var key in shape) { if (typeof shape[key] === 'function') props.methods = (props.methods||[]).concat(key); } } catch(e) {}
       try { var ovr = shape.getProperties(); if (ovr) props.properties = ovr; } catch(e) {
         try { var ovr2 = shape.properties(); if (ovr2) props.properties = ovr2; } catch(e2) { props.properties_error = e2.message; }
       }
       try { var pts = shape.getPoints(); if (pts) props.points = pts; } catch(e) { props.points_error = e.message; }
-      try { props.name = shape.name; } catch(e) {}
       try { props.visible = shape.isVisible(); } catch(e) {}
       try { props.locked = shape.isLocked(); } catch(e) {}
       try { props.selectable = shape.isSelectionEnabled(); } catch(e) {}
@@ -273,6 +326,8 @@ export async function inspectShape({ entity_id }) {
   if (result?.error) throw new Error(result.error);
   return { success: true, ...result };
 }
+
+// ── PUBLIC: removePosition ────────────────────────────────────────────────────
 
 export async function removePosition({ entity_id, entity_ids }) {
   const ids = entity_ids || (entity_id ? [entity_id] : []);
