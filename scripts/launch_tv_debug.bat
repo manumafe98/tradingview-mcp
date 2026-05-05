@@ -21,6 +21,10 @@ REM Check MSIX / Windows Store installs
 if "%TV_EXE%"=="" (
     for /f "tokens=*" %%i in ('dir /s /b "%PROGRAMFILES%\WindowsApps\TradingView*\TradingView.exe" 2^>nul') do set "TV_EXE=%%i"
 )
+REM Check specific WindowsApps path
+if "%TV_EXE%"=="" (
+    if exist "%PROGRAMFILES%\WindowsApps\TradingView.Desktop_3.1.0.7818_x64__n534cwy3pjxzj\TradingView.exe" set "TV_EXE=%PROGRAMFILES%\WindowsApps\TradingView.Desktop_3.1.0.7818_x64__n534cwy3pjxzj\TradingView.exe"
+)
 if "%TV_EXE%"=="" (
     for /f "tokens=*" %%i in ('where TradingView.exe 2^>nul') do set "TV_EXE=%%i"
 )

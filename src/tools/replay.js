@@ -3,10 +3,11 @@ import { jsonResult } from './_format.js';
 import * as core from '../core/replay.js';
 
 export function registerReplayTools(server) {
-  server.tool('replay_start', 'Start bar replay mode, optionally at a specific date', {
-    date: z.string().optional().describe('Date to start replay from (YYYY-MM-DD format). If omitted, selects first available date.'),
-  }, async ({ date }) => {
-    try { return jsonResult(await core.start({ date })); }
+  server.tool('replay_start', 'Start bar replay mode, optionally at a specific date and time (interpreted in chart timezone)', {
+    date: z.string().optional().describe('Date to start replay from (YYYY-MM-DD format, e.g. "2024-01-15"). Can also include time as ISO 8601 (e.g. "2024-01-15T09:30:00"). Time is interpreted in the chart\'s configured timezone. If omitted, selects first available date.'),
+    time: z.string().optional().describe('Time of day to start replay from (HH:MM or HH:MM:SS format, e.g. "09:30" or "14:30:00"). Interpreted in the chart\'s configured timezone. Combined with date parameter. Ignored if date is not provided.'),
+  }, async ({ date, time }) => {
+    try { return jsonResult(await core.start({ date, time })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 

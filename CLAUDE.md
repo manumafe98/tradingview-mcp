@@ -1,6 +1,6 @@
 # TradingView MCP — Claude Instructions
 
-68 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
+73 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
 
 ## Decision Tree — Which Tool When
 
@@ -52,7 +52,7 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 8. `pine_open` → load a saved script by name
 
 ### "Practice trading with replay"
-1. `replay_start` with `date: "2025-03-01"` → enter replay mode
+1. `replay_start` with `date: "2025-03-01"` or `date: "2025-03-01", time: "09:30"` → enter replay mode (time interpreted in chart timezone)
 2. `replay_step` → advance one bar
 3. `replay_autoplay` → auto-advance (set speed with `speed` param in ms)
 4. `replay_trade` with `action: "buy"/"sell"/"close"` → execute trades
@@ -67,6 +67,16 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `draw_list` → see what's drawn
 - `draw_remove_one` → remove by ID
 - `draw_clear` → remove all
+
+### "Draw a position / trade setup"
+- `draw_long_position`  → green profit zone above entry, red stop zone below
+- `draw_short_position` → green profit zone below entry, red stop zone above
+- `draw_position`       → same, with explicit direction param
+- Required: entry_price, stop_price, target_price
+- Optional: account_size (default 1000), risk_percent (default 2), lot_size (default 1), leverage (default 1)
+- Returns entity_id (native) or entity_ids[] (manual fallback)
+- To remove: `position_remove` with entity_id or entity_ids[]
+- To debug shape overrides: `position_inspect_shape` with entity_id from `draw_list`
 
 ### "Manage alerts"
 - `alert_create` → set price alert (condition: "crossing", "greater_than", "less_than")
