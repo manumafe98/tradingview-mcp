@@ -116,6 +116,23 @@ async function drawNativeShape({ shapeType, entry, stop, target, accountSize, ri
     leverage:     leverage || 1,
   };
 
+  // Get tick size and convert profitLevel/stopLevel to tick offsets from entry.
+  // TV's long_position/short_position ignores absolute prices; it needs ticks.
+  try {
+    const ps = await evaluate(`
+      (function() {
+        var cw = ${apiPath};
+        try { return cw._chartWidget.model().mainSeries()._priceStep || 1; }
+        catch(e) { return 1; }
+      })()
+    `);
+    const tickSize = typeof ps === 'number' && ps > 0 ? ps : 1;
+    if (tickSize > 0 && tickSize !== 1) {
+      overrides.profitLevel = Math.abs(target - entry) / tickSize;
+      overrides.stopLevel   = Math.abs(entry - stop) / tickSize;
+    }
+  } catch (_) {}
+
   const overridesStr = JSON.stringify(overrides);
   const p1time = requireFinite(t, 'barTime');
   const p1price = requireFinite(entry, 'entry');
@@ -123,37 +140,38 @@ async function drawNativeShape({ shapeType, entry, stop, target, accountSize, ri
   const before = await evaluate(`${apiPath}.getAllShapes().map(function(s){return s.id;})`);
 
   let shapeId = null;
+  let method = null;
 
-  // Attempt 1: createShape (single anchor)
-  try {
-    await evaluate(`${apiPath}.createShape({time:${p1time},price:${p1price}},{shape:${safeString(shapeType)},overrides:${overridesStr}})`);
-    await new Promise(r => setTimeout(r, 250));
-    const after = await evaluate(`${apiPath}.getAllShapes().map(function(s){return s.id;})`);
-    shapeId = (after || []).find(id => !(before || []).includes(id));
-    if (shapeId) return { method: 'createShape', entity_id: shapeId };
-  } catch {}
-
-  // Attempt 2: createMultipointShape with 3 points (entry, target, stop)
+  // Attempt 1: createMultipointShape with 3 points (entry, target, stop)
   const p2time = requireFinite(t, 'barTime');
   const p2price = requireFinite(target, 'target');
   const p3time = requireFinite(t, 'barTime');
   const p3price = requireFinite(stop, 'stop');
-  try {
-    await evaluate(`${apiPath}.createMultipointShape([{time:${p1time},price:${p1price}},{time:${p2time},price:${p2price}},{time:${p3time},price:${p3price}}],{shape:${safeString(shapeType)},overrides:${overridesStr}})`);
-    await new Promise(r => setTimeout(r, 250));
-    const after2 = await evaluate(`${apiPath}.getAllShapes().map(function(s){return s.id;})`);
-    shapeId = (after2 || []).find(id => !(before || []).includes(id));
-    if (shapeId) return { method: 'createMultipointShape_3pt', entity_id: shapeId };
-  } catch {}
+  if (!shapeId) {
+    try {
+      await evaluate(`${apiPath}.createMultipointShape([{time:${p1time},price:${p1price}},{time:${p2time},price:${p2price}},{time:${p3time},price:${p3price}}],{shape:${safeString(shapeType)},overrides:${overridesStr}})`);
+      await new Promise(r => setTimeout(r, 250));
+      const after2 = await evaluate(`${apiPath}.getAllShapes().map(function(s){return s.id;})`);
+      shapeId = (after2 || []).find(id => !(before || []).includes(id));
+      if (shapeId) method = 'createMultipointShape_3pt';
+    } catch {}
+  }
 
-  // Attempt 3: createMultipointShape with 2 points
-  try {
-    await evaluate(`${apiPath}.createMultipointShape([{time:${p1time},price:${p1price}},{time:${p3time},price:${p3price}}],{shape:${safeString(shapeType)},overrides:${overridesStr}})`);
-    await new Promise(r => setTimeout(r, 250));
-    const after3 = await evaluate(`${apiPath}.getAllShapes().map(function(s){return s.id;})`);
-    shapeId = (after3 || []).find(id => !(before || []).includes(id));
-    if (shapeId) return { method: 'createMultipointShape_2pt', entity_id: shapeId };
-  } catch {}
+  // Attempt 2: createMultipointShape with 2 points
+  if (!shapeId) {
+    try {
+      await evaluate(`${apiPath}.createMultipointShape([{time:${p1time},price:${p1price}},{time:${p3time},price:${p3price}}],{shape:${safeString(shapeType)},overrides:${overridesStr}})`);
+      await new Promise(r => setTimeout(r, 250));
+      const after3 = await evaluate(`${apiPath}.getAllShapes().map(function(s){return s.id;})`);
+      shapeId = (after3 || []).find(id => !(before || []).includes(id));
+      if (shapeId) method = 'createMultipointShape_2pt';
+    } catch {}
+  }
+
+  // Overrides already include tick-based profitLevel/stopLevel at creation time
+  if (shapeId && method) {
+    return { method, entity_id: shapeId };
+  }
 
   return null;
 }
@@ -248,6 +266,8 @@ export async function drawPosition({ direction, entry, stop, target, accountSize
   // Resolve bar time — uses replay position when in replay mode
   const barTime = await getBarTime(evaluate);
 
+  // Native long_position/short_position shapes require profitLevel/stopLevel as
+  // TICK OFFSETS from entry, not absolute prices. TV's rendering ignores absolute values.
   const shapeType = direction === 'short' ? 'short_position' : 'long_position';
 
   const native = await drawNativeShape({
