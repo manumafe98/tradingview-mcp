@@ -15,6 +15,7 @@ import { registerUiTools } from './tools/ui.js';
 import { registerPaneTools } from './tools/pane.js';
 import { registerTabTools } from './tools/tab.js';
 import { registerPositionTools } from './tools/position.js';
+import { registerSnapshotTools } from './tools/snapshot.js';
 
 const server = new McpServer(
   {
@@ -53,6 +54,7 @@ Pine Script development:
 - WARNING: pine_get_source can return 200KB+ for complex scripts — avoid unless editing
 
 Screenshots: capture_screenshot → regions: "full", "chart", "strategy_tester"
+Screenshot link: get_screenshot_link → shareable TradingView URL (https://www.tradingview.com/x/...)
 Replay: replay_start → replay_step → replay_trade → replay_status → replay_stop
 Batch: batch_run → run action across multiple symbols/timeframes
 Drawing: draw_shape → horizontal_line, trend_line, rectangle, text
@@ -86,6 +88,7 @@ registerUiTools(server);
 registerPaneTools(server);
 registerTabTools(server);
 registerPositionTools(server);
+registerSnapshotTools(server);
 
 // Startup notice (stderr so it doesn't interfere with MCP stdio protocol)
 process.stderr.write('⚠  tradingview-mcp  |  Unofficial tool. Not affiliated with TradingView Inc. or Anthropic.\n');
