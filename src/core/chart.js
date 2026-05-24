@@ -211,6 +211,61 @@ export async function symbolInfo() {
   return { success: true, ...result };
 }
 
+export async function fitToPrices({ min_price, max_price, center_price, y_multiplier, y_padding, bar_window, _deps }) {
+  const { evaluate } = _resolve(_deps);
+  const mn = requireFinite(min_price, 'min_price');
+  const mx = requireFinite(max_price, 'max_price');
+  const range = mx - mn;
+  const center = center_price !== undefined ? requireFinite(center_price, 'center_price') : (mn + mx) / 2;
+  const ym = y_multiplier !== undefined
+    ? requireFinite(y_multiplier, 'y_multiplier')
+    : Math.max(1.0, Math.min(8.0, Math.round(114 * Math.pow(range, -0.706) * 10) / 10));
+  const bw = bar_window !== undefined ? requireFinite(bar_window, 'bar_window') : 180;
+
+  let fromY, toY;
+  if (y_padding !== undefined) {
+    const pad = requireFinite(y_padding, 'y_padding');
+    fromY = mn - pad;
+    toY = mx + pad;
+  } else {
+    const half = range * ym / 2;
+    fromY = center - half;
+    toY = center + half;
+  }
+
+  const result = await evaluate(`
+    (function() {
+      var chart = ${CHART_API};
+      var m = chart._chartWidget.model();
+      var ms = m.mainSeries();
+      var ps = ms.priceScale();
+      var ts = m.timeScale();
+      var bars = ms.bars();
+      var lastIdx = bars.lastIndex();
+      var leftBars = Math.floor(${bw} * 0.7);
+      var rightBars = Math.floor(${bw} * 0.3);
+      var fromIdx = Math.max(bars.firstIndex(), lastIdx - leftBars);
+      var toIdx = lastIdx;
+      ps.setPriceRangeInPrice({ from: ${fromY}, to: ${toY} });
+      ts.zoomToBarsRange(fromIdx, toIdx);
+      ts.setRightOffset(rightBars);
+      var actualPrice = null;
+      try { actualPrice = ps.priceRangeInPrice(); } catch(e) {}
+      return {
+        price_range: actualPrice || { from: ${fromY}, to: ${toY} },
+        bars_range: { from_index: fromIdx, to_index: toIdx },
+        right_offset: rightBars
+      };
+    })()
+  `);
+  await new Promise(r => setTimeout(r, 500));
+  return {
+    success: true,
+    requested: { min_price: mn, max_price: mx, center_price: center, y_multiplier: ym, bar_window: bw, fromY, toY },
+    actual: result || {},
+  };
+}
+
 export async function symbolSearch({ query, type }) {
   // Use TradingView's public symbol search REST API (works without auth)
   const params = new URLSearchParams({

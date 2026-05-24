@@ -12,41 +12,11 @@ export function registerPositionTools(server) {
     risk_percent: z.coerce.number().optional().describe('Risk percentage (default 2)'),
     lot_size: z.coerce.number().optional().describe('Lot size (default 1)'),
     leverage: z.coerce.number().optional().describe('Leverage (default 1)'),
-  }, async ({ direction, entry_price, stop_price, target_price, account_size, risk_percent, lot_size, leverage }) => {
+    auto_zoom: z.coerce.boolean().optional().describe('Auto-zoom chart to fit the position after drawing (default false)'),
+    center_price: z.coerce.number().optional().describe('Y-axis center price override for auto_zoom (default: entry price)'),
+  }, async ({ direction, entry_price, stop_price, target_price, account_size, risk_percent, lot_size, leverage, auto_zoom, center_price }) => {
     try {
-      return jsonResult(await core.drawPosition({ direction, entry: entry_price, stop: stop_price, target: target_price, accountSize: account_size, riskPercent: risk_percent, lotSize: lot_size, leverage }));
-    } catch (err) {
-      return jsonResult({ success: false, error: err.message }, true);
-    }
-  });
-
-  server.tool('draw_long_position', 'Draw a long position box (entry above, target above stop)', {
-    entry_price: z.coerce.number().describe('Entry price'),
-    stop_price: z.coerce.number().describe('Stop loss price (must be below entry)'),
-    target_price: z.coerce.number().describe('Profit target price (must be above entry)'),
-    account_size: z.coerce.number().optional().describe('Account size (default 1000)'),
-    risk_percent: z.coerce.number().optional().describe('Risk percentage (default 2)'),
-    lot_size: z.coerce.number().optional().describe('Lot size (default 1)'),
-    leverage: z.coerce.number().optional().describe('Leverage (default 1)'),
-  }, async ({ entry_price, stop_price, target_price, account_size, risk_percent, lot_size, leverage }) => {
-    try {
-      return jsonResult(await core.drawPosition({ direction: 'long', entry: entry_price, stop: stop_price, target: target_price, accountSize: account_size, riskPercent: risk_percent, lotSize: lot_size, leverage }));
-    } catch (err) {
-      return jsonResult({ success: false, error: err.message }, true);
-    }
-  });
-
-  server.tool('draw_short_position', 'Draw a short position box (entry below, target below stop)', {
-    entry_price: z.coerce.number().describe('Entry price'),
-    stop_price: z.coerce.number().describe('Stop loss price (must be above entry)'),
-    target_price: z.coerce.number().describe('Profit target price (must be below entry)'),
-    account_size: z.coerce.number().optional().describe('Account size (default 1000)'),
-    risk_percent: z.coerce.number().optional().describe('Risk percentage (default 2)'),
-    lot_size: z.coerce.number().optional().describe('Lot size (default 1)'),
-    leverage: z.coerce.number().optional().describe('Leverage (default 1)'),
-  }, async ({ entry_price, stop_price, target_price, account_size, risk_percent, lot_size, leverage }) => {
-    try {
-      return jsonResult(await core.drawPosition({ direction: 'short', entry: entry_price, stop: stop_price, target: target_price, accountSize: account_size, riskPercent: risk_percent, lotSize: lot_size, leverage }));
+      return jsonResult(await core.drawPosition({ direction, entry: entry_price, stop: stop_price, target: target_price, accountSize: account_size, riskPercent: risk_percent, lotSize: lot_size, leverage, autoZoom: auto_zoom, centerPrice: center_price }));
     } catch (err) {
       return jsonResult({ success: false, error: err.message }, true);
     }

@@ -64,6 +64,18 @@ export function registerChartTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
+  server.tool('chart_fit_to_prices', 'Zoom and center the chart around a price range, with optional time-axis control', {
+    min_price: z.coerce.number().describe('Lower price bound (e.g., SL for long, TP for short)'),
+    max_price: z.coerce.number().describe('Upper price bound (e.g., TP for long, SL for short)'),
+    center_price: z.coerce.number().optional().describe('Price to center Y-axis on (defaults to midpoint of min/max)'),
+    y_multiplier: z.coerce.number().optional().describe('Multiplier on (max-min) for total Y range (default 2.5)'),
+    y_padding: z.coerce.number().optional().describe('Override: fixed padding (pts) above max / below min'),
+    bar_window: z.coerce.number().optional().describe('Total bars to show centered on current bar (default 75)'),
+  }, async ({ min_price, max_price, center_price, y_multiplier, y_padding, bar_window }) => {
+    try { return jsonResult(await core.fitToPrices({ min_price, max_price, center_price, y_multiplier, y_padding, bar_window })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
   server.tool('symbol_search', 'Search for symbols by name or keyword', {
     query: z.string().describe('Search query (e.g., "AAPL", "crude oil", "ES")'),
     type: z.string().optional().describe('Filter by type (e.g., "stock", "futures", "crypto", "forex")'),

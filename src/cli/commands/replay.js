@@ -12,8 +12,11 @@ register('replay', {
       handler: (opts) => core.start({ date: opts.date }),
     }],
     ['step', {
-      description: 'Advance one bar in replay',
-      handler: () => core.step(),
+      description: 'Advance bars in replay mode',
+      options: {
+        steps: { type: 'number', short: 'n', description: 'Number of bars (default 1, max 500)' },
+      },
+      handler: (opts) => core.step({ steps: opts.steps ? Number(opts.steps) : undefined }),
     }],
     ['stop', {
       description: 'Stop replay and return to realtime',

@@ -1187,6 +1187,26 @@ val = array.get(a, 5)`;
       assert.ok(date !== null && date !== undefined, 'Current date returned');
     });
 
+    it('replay_step — advance multiple bars', async () => {
+      const started = await evaluate(wv(`${REPLAY_API}.isReplayStarted()`));
+      if (!started) return;
+
+      const before = await evaluate(wv(`${REPLAY_API}.currentDate()`));
+      await evaluate(`
+        (async () => {
+          var rp = ${REPLAY_API};
+          for (var i = 0; i < 5; i++) {
+            rp.doStep();
+            if (i < 4) await new Promise(function(r) { setTimeout(r, 50); });
+          }
+          var v = rp.currentDate();
+          return (v && typeof v === 'object' && typeof v.value === 'function') ? v.value() : v;
+        })()
+      `);
+      const after = await evaluate(wv(`${REPLAY_API}.currentDate()`));
+      assert.ok(after !== before, 'Date advanced after multi-step');
+    });
+
     it('replay_autoplay — toggle autoplay', async () => {
       const started = await evaluate(wv(`${REPLAY_API}.isReplayStarted()`));
       if (!started) return;

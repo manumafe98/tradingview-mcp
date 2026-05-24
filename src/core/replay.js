@@ -1,7 +1,7 @@
 /**
  * Core replay mode logic.
  */
-import { evaluate as _evaluate, getReplayApi as _getReplayApi } from '../connection.js';
+import { evaluate as _evaluate, evaluateAsync as _evaluateAsync, getReplayApi as _getReplayApi } from '../connection.js';
 
 export const VALID_AUTOPLAY_DELAYS = [100, 143, 200, 300, 1000, 2000, 3000, 5000, 10000];
 
@@ -12,6 +12,7 @@ function wv(path) {
 function _resolve(deps) {
   return {
     evaluate: deps?.evaluate || _evaluate,
+    evaluateAsync: deps?.evaluateAsync || _evaluateAsync,
     getReplayApi: deps?.getReplayApi || _getReplayApi,
   };
 }
@@ -225,8 +226,10 @@ export async function start({ date, time, _deps } = {}) {
   };
 }
 
-export async function step({ _deps } = {}) {
-  const { evaluate, getReplayApi } = _resolve(_deps);
+export async function step({ steps = 1, _deps } = {}) {
+  const { evaluate, evaluateAsync, getReplayApi } = _resolve(_deps);
+
+  if (!Number.isInteger(steps) || steps < 1) steps = 1;
 
   // Dismiss any modal that may be blocking the UI before we try to step
   await dismissReplayModal(evaluate);
@@ -235,20 +238,50 @@ export async function step({ _deps } = {}) {
   const started = await evaluate(wv(`${rp}.isReplayStarted()`));
   if (!started) throw new Error('Replay is not started. Use replay_start first.');
 
-  const before = await evaluate(wv(`${rp}.currentDate()`));
-  await evaluate(`${rp}.doStep()`);
-  await new Promise(r => setTimeout(r, 500));
-
-  let currentDate = before;
-  for (let i = 0; i < 12; i++) {
-    // Dismiss any modal that appeared after stepping (e.g., end-of-data prompts)
-    await dismissReplayModal(evaluate);
-    currentDate = await evaluate(wv(`${rp}.currentDate()`));
-    if (currentDate !== before) break;
-    await new Promise(r => setTimeout(r, 250));
+  // Auto-pause autoplay if active during multi-step
+  let wasAutoplay = false;
+  if (steps > 1) {
+    wasAutoplay = await evaluate(wv(`${rp}.isAutoplayStarted()`));
+    if (wasAutoplay) await evaluate(`${rp}.toggleAutoplay()`);
   }
 
-  return { success: true, action: 'step', current_date: currentDate };
+  const before = await evaluate(wv(`${rp}.currentDate()`));
+
+  if (steps <= 1) {
+    await evaluate(`${rp}.doStep()`);
+    await new Promise(r => setTimeout(r, 500));
+
+    let currentDate = before;
+    for (let i = 0; i < 12; i++) {
+      await dismissReplayModal(evaluate);
+      currentDate = await evaluate(wv(`${rp}.currentDate()`));
+      if (currentDate !== before) break;
+      await new Promise(r => setTimeout(r, 250));
+    }
+
+    return { success: true, action: 'step', current_date: currentDate };
+  }
+
+  // Multi-step: single CDP call with internal async loop
+  const finalDate = await evaluateAsync(`
+    (async () => {
+      var rp = ${rp};
+      for (var i = 0; i < ${steps}; i++) {
+        rp.doStep();
+        if (i < ${steps} - 1) await new Promise(function(r) { setTimeout(r, 50); });
+      }
+      var v = rp.currentDate();
+      return (v && typeof v === 'object' && typeof v.value === 'function') ? v.value() : v;
+    })()
+  `);
+
+  // Resume autoplay if we paused it
+  if (wasAutoplay) await evaluate(`${rp}.toggleAutoplay()`);
+
+  // Clean up any end-of-data modals
+  await dismissReplayModal(evaluate);
+
+  return { success: true, action: 'step', steps, current_date: String(finalDate) };
 }
 
 export async function autoplay({ speed, _deps } = {}) {

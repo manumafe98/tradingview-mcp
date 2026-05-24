@@ -1,6 +1,6 @@
 # TradingView MCP — Claude Instructions
 
-73 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
+83 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
 
 ## Decision Tree — Which Tool When
 
@@ -8,6 +8,7 @@
 1. `chart_get_state` → symbol, timeframe, chart type, list of all indicators with entity IDs
 2. `data_get_study_values` → current numeric values from all visible indicators (RSI, MACD, BBands, EMAs, etc.)
 3. `quote_get` → real-time price, OHLC, volume for current symbol
+4. `data_get_indicator` → detailed indicator/study info and input values for a specific entity ID
 
 ### "What levels/lines/labels are showing?"
 Custom Pine indicators draw with `line.new()`, `label.new()`, `table.new()`, `box.new()`. These are invisible to normal data tools. Use:
@@ -23,6 +24,7 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `data_get_ohlcv` with `summary: true` → compact stats (high, low, range, change%, avg volume, last 5 bars)
 - `data_get_ohlcv` without summary → all bars (use `count` to limit, default 100)
 - `quote_get` → single latest price snapshot
+- `depth_get` → order book / DOM data from the chart
 
 ### "Analyze my chart" (full report workflow)
 1. `quote_get` → current price
@@ -32,6 +34,12 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 5. `data_get_pine_tables` → session stats, analytics tables
 6. `data_get_ohlcv` with `summary: true` → price action summary
 7. `capture_screenshot` → visual confirmation
+8. `get_screenshot_link` → shareable TradingView link (Alt+S clipboard)
+
+### "Check my strategy performance"
+- `data_get_strategy_results` → overall performance metrics
+- `data_get_trades` → individual trade list
+- `data_get_equity` → equity curve data
 
 ### "Change the chart"
 - `chart_set_symbol` → switch ticker (e.g., "AAPL", "ES1!", "NYMEX:CL1!")
@@ -40,6 +48,8 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `chart_manage_indicator` → add or remove studies (use full name: "Relative Strength Index", not "RSI")
 - `chart_scroll_to_date` → jump to a date (ISO format: "2025-01-15")
 - `chart_set_visible_range` → zoom to exact date range (unix timestamps)
+- `chart_fit_to_prices` → zoom Y-axis to a price range + center X-axis around current bar
+- `chart_get_visible_range` → get current visible date and bar ranges
 
 ### "Work on Pine Script"
 1. `pine_set_source` → inject code into editor
@@ -53,7 +63,7 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 
 ### "Practice trading with replay"
 1. `replay_start` with `date: "2025-03-01"` or `date: "2025-03-01", time: "09:30"` → enter replay mode (time interpreted in chart timezone)
-2. `replay_step` → advance one bar
+2. `replay_step` → advance one or more bars (pass `steps` for multi-bar)
 3. `replay_autoplay` → auto-advance (set speed with `speed` param in ms)
 4. `replay_trade` with `action: "buy"/"sell"/"close"` → execute trades
 5. `replay_status` → check position, P&L, current date
@@ -65,15 +75,14 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 ### "Draw on the chart"
 - `draw_shape` → horizontal_line, trend_line, rectangle, text (pass point + optional point2)
 - `draw_list` → see what's drawn
+- `draw_get_properties` → inspect a drawing's properties and points
 - `draw_remove_one` → remove by ID
 - `draw_clear` → remove all
 
 ### "Draw a position / trade setup"
-- `draw_long_position`  → green profit zone above entry, red stop zone below
-- `draw_short_position` → green profit zone below entry, red stop zone above
-- `draw_position`       → same, with explicit direction param
-- Required: entry_price, stop_price, target_price
-- Optional: account_size (default 1000), risk_percent (default 2), lot_size (default 1), leverage (default 1)
+- `draw_position` → draw long/short position box with entry/stop/target levels
+- Required: direction ("long" or "short"), entry_price, stop_price, target_price
+- Optional: account_size (default 1000), risk_percent (default 2), lot_size (default 1), leverage (default 1), auto_zoom (default false), center_price (default entry)
 - Returns entity_id (native) or entity_ids[] (manual fallback)
 - To remove: `position_remove` with entity_id or entity_ids[]
 - To debug shape overrides: `position_inspect_shape` with entity_id from `draw_list`
@@ -86,9 +95,18 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 ### "Navigate the UI"
 - `ui_open_panel` → open/close pine-editor, strategy-tester, watchlist, alerts, trading
 - `ui_click` → click buttons by aria-label, text, or data-name
-- `layout_switch` → load a saved layout by name
+- `ui_find_element` → find UI elements by text or aria-label
+- `ui_hover` → hover over UI elements
+- `ui_keyboard` → press keyboard shortcuts (Enter, Escape, Alt+S, Ctrl+Z)
+- `ui_scroll` → scroll the chart up/down/left/right
+- `ui_type_text` → type text into focused input
+- `ui_mouse_click` → click at specific x,y coordinates
 - `ui_fullscreen` → toggle fullscreen
+- `layout_switch` → load a saved layout by name
+- `tv_ui_state` → check which panels/buttons are visible and enabled
 - `capture_screenshot` → take a screenshot (regions: "full", "chart", "strategy_tester")
+- `get_screenshot_link` → get a shareable TradingView link from clipboard (Alt+S)
+- `tv_ui_state` → check which panels/buttons are visible and enabled
 
 ### "TradingView isn't running"
 - `tv_launch` → auto-detect and launch TradingView with CDP on Mac/Win/Linux
@@ -104,8 +122,9 @@ These tools can return large payloads. Follow these rules to avoid context bloat
 4. **Avoid calling `pine_get_source`** on complex scripts — it can return 200KB+. Only read if you need to edit the code.
 5. **Avoid calling `data_get_indicator`** on protected/encrypted indicators — their inputs are encoded blobs. Use `data_get_study_values` instead for current values.
 6. **Use `capture_screenshot`** for visual context instead of pulling large datasets — a screenshot is ~300KB but gives you the full visual picture
-7. **Call `chart_get_state` once** at the start to get entity IDs, then reference them — don't re-call repeatedly
-8. **Cap your OHLCV requests** — `count: 20` for quick analysis, `count: 100` for deeper work, `count: 500` only when specifically needed
+7. **Use `get_screenshot_link`** to get a shareable TradingView URL after analysis (triggers Alt+S, reads clipboard)
+8. **Call `chart_get_state` once** at the start to get entity IDs, then reference them — don't re-call repeatedly
+9. **Cap your OHLCV requests** — `count: 20` for quick analysis, `count: 100` for deeper work, `count: 500` only when specifically needed
 
 ### Output Size Estimates (compact mode)
 | Tool | Typical Output |
@@ -119,6 +138,7 @@ These tools can return large payloads. Follow these rules to avoid context bloat
 | `data_get_ohlcv` (summary) | ~500 bytes |
 | `data_get_ohlcv` (100 bars) | ~8 KB |
 | `capture_screenshot` | ~300 bytes (returns file path, not image data) |
+| `chart_fit_to_prices` | ~300 bytes |
 
 ## Tool Conventions
 

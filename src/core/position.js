@@ -2,6 +2,7 @@
  * Core position drawing logic — three-attempt strategy for native shape + manual fallback.
  */
 import { evaluate as _evaluate, getChartApi as _getChartApi, safeString, requireFinite } from '../connection.js';
+import { fitToPrices as _fitToPrices } from './chart.js';
 
 function _resolve(deps) {
   return {
@@ -251,7 +252,7 @@ async function drawManualFallback({ entry, stop, target, direction, barTime: bt,
 
 // ── PUBLIC: drawPosition ──────────────────────────────────────────────────────
 
-export async function drawPosition({ direction, entry, stop, target, accountSize, riskPercent, lotSize, leverage, _deps }) {
+export async function drawPosition({ direction, entry, stop, target, accountSize, riskPercent, lotSize, leverage, autoZoom, centerPrice, _deps }) {
   const deps = _deps || {};
   const { evaluate } = _resolve(deps);
 
@@ -280,9 +281,11 @@ export async function drawPosition({ direction, entry, stop, target, accountSize
     deps,
   });
 
+  const metrics = calcMetrics({ entry, stop, target, direction, accountSize: accountSize || 1000, riskPercent: riskPercent || 2, lotSize: lotSize || 1, leverage: leverage || 1 });
+
+  let result;
   if (native?.entity_id) {
-    const metrics = calcMetrics({ entry, stop, target, direction, accountSize: accountSize || 1000, riskPercent: riskPercent || 2, lotSize: lotSize || 1, leverage: leverage || 1 });
-    return {
+    result = {
       success: true,
       method: 'native_shape',
       shape_type: shapeType,
@@ -298,26 +301,38 @@ export async function drawPosition({ direction, entry, stop, target, accountSize
       leverage:     leverage || 1,
       metrics,
     };
+  } else {
+    const ids = await drawManualFallback({ entry, stop, target, direction, barTime, deps });
+    result = {
+      success: true,
+      method: 'manual_fallback',
+      shape_type: `${shapeType}_manual`,
+      entity_ids: ids,
+      direction,
+      entry_price: entry,
+      stop_price:  stop,
+      target_price: target,
+      account_size: accountSize || 1000,
+      risk_percent: riskPercent || 2,
+      lot_size:     lotSize || 1,
+      leverage:     leverage || 1,
+      note: 'Native long_position/short_position shape was not available. Manual fallback rendered.',
+      metrics,
+    };
   }
 
-  const ids = await drawManualFallback({ entry, stop, target, direction, barTime, deps });
-  const metrics = calcMetrics({ entry, stop, target, direction, accountSize: accountSize || 1000, riskPercent: riskPercent || 2, lotSize: lotSize || 1, leverage: leverage || 1 });
-  return {
-    success: true,
-    method: 'manual_fallback',
-    shape_type: `${shapeType}_manual`,
-    entity_ids: ids,
-    direction,
-    entry_price: entry,
-    stop_price:  stop,
-    target_price: target,
-    account_size: accountSize || 1000,
-    risk_percent: riskPercent || 2,
-    lot_size:     lotSize || 1,
-    leverage:     leverage || 1,
-    note: 'Native long_position/short_position shape was not available. Manual fallback rendered.',
-    metrics,
-  };
+  if (autoZoom) {
+    const mn = Math.min(stop, target);
+    const mx = Math.max(stop, target);
+    try {
+      const zoomResult = await _fitToPrices({ min_price: mn, max_price: mx, center_price: centerPrice ?? entry, _deps: deps });
+      result.zoom = zoomResult;
+    } catch (e) {
+      result.zoom = { success: false, error: e.message };
+    }
+  }
+
+  return result;
 }
 
 // ── PUBLIC: inspectShape ──────────────────────────────────────────────────────

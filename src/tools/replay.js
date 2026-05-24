@@ -11,8 +11,11 @@ export function registerReplayTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
-  server.tool('replay_step', 'Advance one bar in replay mode', {}, async () => {
-    try { return jsonResult(await core.step()); }
+  server.tool('replay_step', 'Advance one or more bars in replay mode', {
+    steps: z.number().int().min(1).max(500).optional()
+      .describe('Number of bars to advance (default 1, max 500)'),
+  }, async ({ steps }) => {
+    try { return jsonResult(await core.step({ steps })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
