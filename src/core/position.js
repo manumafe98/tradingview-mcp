@@ -41,35 +41,41 @@ export { dateTimeToTimestamp } from './replay.js';
 // themselves (isReplayStarted / currentDate are often WatchedValue instances).
 
 async function getBarTime(evaluate) {
-  const t = await evaluate(`
-    (function() {
-      // ── Attempt 1: replay mode — use the replay API's current position ──────
-      // This is the authoritative timestamp the user navigated to via replay_start.
-      // It correctly reflects the chart timezone conversion done in start().
-      try {
-        var rp = window.TradingViewApi && window.TradingViewApi._replayApi;
-        if (rp) {
-          // isReplayStarted() may itself be a WatchedValue — unwrap it
-          var started = typeof rp.isReplayStarted === 'function' ? rp.isReplayStarted() : false;
-          if (started && typeof started === 'object' && typeof started.value === 'function') {
-            started = started.value();
-          }
+  // Attempt 1: replay mode — use the replay API's current position.
+  // Retry up to 5 times (100ms apart) because after a fresh replay_start,
+  // the WatchedValue for currentDate() may not be populated yet.
+  const REPLAY_RETRIES = 5;
+  const REPLAY_DELAY = 100;
 
-          if (started) {
-            // currentDate() is also sometimes a WatchedValue
-            var cd = typeof rp.currentDate === 'function' ? rp.currentDate() : null;
-            if (cd && typeof cd === 'object' && typeof cd.value === 'function') {
-              cd = cd.value();
+  for (let i = 0; i < REPLAY_RETRIES; i++) {
+    const cd = await evaluate(`
+      (function() {
+        try {
+          var rp = window.TradingViewApi && window.TradingViewApi._replayApi;
+          if (rp) {
+            var started = typeof rp.isReplayStarted === 'function' ? rp.isReplayStarted() : false;
+            if (started && typeof started === 'object' && typeof started.value === 'function') {
+              started = started.value();
             }
-            // Must be a positive number (unix seconds)
-            if (typeof cd === 'number' && cd > 0) return cd;
+            if (started) {
+              var d = typeof rp.currentDate === 'function' ? rp.currentDate() : null;
+              if (d && typeof d === 'object' && typeof d.value === 'function') {
+                d = d.value();
+              }
+              if (typeof d === 'number' && d > 0) return d;
+            }
           }
-        }
-      } catch (e) {
-        // _replayApi not available or replay not initialised — fall through
-      }
+        } catch (e) {}
+        return null;
+      })()
+    `);
+    if (typeof cd === 'number' && cd > 0) return cd;
+    if (i < REPLAY_RETRIES - 1) await new Promise(r => setTimeout(r, REPLAY_DELAY));
+  }
 
-      // ── Attempt 2: not in replay — use the last bar's open timestamp ─────────
+  // Attempt 2: fallback — use the last bar's open timestamp
+  const fallback = await evaluate(`
+    (function() {
       try {
         var bars = window.TradingViewApi
           ._activeChartWidgetWV.value()
@@ -77,11 +83,10 @@ async function getBarTime(evaluate) {
         var v = bars.valueAt(bars.lastIndex());
         if (v && typeof v[0] === 'number' && v[0] > 0) return v[0];
       } catch (e) {}
-
       return null;
     })()
   `);
-  return t;
+  return fallback || 0;
 }
 
 // ── calcMetrics ───────────────────────────────────────────────────────────────
