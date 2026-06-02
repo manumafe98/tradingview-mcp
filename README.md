@@ -165,7 +165,7 @@ tv stream quote | jq '.close'      # monitor price changes
 ```
 tv status / launch / state / symbol / timeframe / type / info / search
 tv quote / ohlcv / values
-tv data lines/labels/tables/boxes/strategy/trades/equity/depth/indicator
+tv data lines/labels/tables/boxes/strategy/trades/strategy-range/equity/depth/indicator
 tv pine get/set/compile/analyze/check/save/new/open/list/errors/console
 tv draw shape/list/get/remove/clear
 tv alert list/create/delete
@@ -215,7 +215,7 @@ Claude reads [`CLAUDE.md`](CLAUDE.md) automatically when working in this project
 | "Draw a level at 24500" | `draw_shape` (horizontal_line) |
 | "Take a screenshot" | `capture_screenshot` |
 
-## Tool Reference (83 MCP tools)
+## Tool Reference (84 MCP tools)
 
 ### Chart Reading
 
@@ -252,6 +252,7 @@ Read `line.new()`, `label.new()`, `table.new()`, `box.new()` output from any vis
 | `chart_scroll_to_date` | Jump to a date (ISO: "2025-01-15") |
 | `chart_set_visible_range` | Zoom to exact range (unix timestamps) |
 | `chart_get_visible_range` | Get current visible date and bar ranges |
+| `chart_reset_view` | Reset price scale + time scale to default. Use before stacking `chart_fit_to_prices` calls |
 | `chart_fit_to_prices` | Zoom Y-axis to a price range + center X-axis around current bar |
 | `symbol_info` / `symbol_search` | Symbol metadata and search |
 | `indicator_set_inputs` / `indicator_toggle_visibility` | Change indicator settings, show/hide |
@@ -261,8 +262,11 @@ Read `line.new()`, `label.new()`, `table.new()`, `box.new()` output from any vis
 | Tool | What it does |
 |------|-------------|
 | `data_get_strategy_results` | Overall performance metrics from Strategy Tester |
-| `data_get_trades` | Individual trade list from Strategy Tester |
+| `strategy_set_report_range` | Set Strategy Tester report range via UI automation |
+| `data_get_trades` | Closed strategy trades from the active Strategy Tester report, with `limit`/`offset` pagination |
 | `data_get_equity` | Equity curve data from Strategy Tester |
+
+For large backtests, set the report range first (for example `entire_history`), then page through closed trades with `data_get_trades` using `limit` and `offset`.
 
 ### Multi-Pane Layouts
 
@@ -372,7 +376,7 @@ npm test
 Claude Code  ←→  MCP Server (stdio)  ←→  CDP (port 9222)  ←→  TradingView Desktop (Electron)
 ```
 
-- **Transport**: MCP over stdio (83 tools) + CLI (`tv` command, 30 commands with 66 subcommands)
+- **Transport**: MCP over stdio (84 tools) + CLI (`tv` command, 30 commands with 66 subcommands)
 - **Connection**: Chrome DevTools Protocol on localhost:9222
 - **Streaming**: Poll-and-diff loop with deduplication, JSONL output to stdout
 - **No dependencies** beyond `@modelcontextprotocol/sdk` and `chrome-remote-interface`

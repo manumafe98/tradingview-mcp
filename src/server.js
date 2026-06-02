@@ -24,7 +24,7 @@ const server = new McpServer(
     description: 'AI-assisted TradingView chart analysis and Pine Script development via Chrome DevTools Protocol',
   },
   {
-    instructions: `TradingView MCP — 78 tools for reading and controlling a live TradingView Desktop chart.
+    instructions: `TradingView MCP — 79 tools for reading and controlling a live TradingView Desktop chart.
 
 TOOL SELECTION GUIDE — use this to pick the right tool:
 
@@ -46,7 +46,10 @@ Changing the chart:
 - chart_set_symbol, chart_set_timeframe, chart_set_type → change ticker/resolution/style
 - chart_manage_indicator → add/remove studies. USE FULL NAMES: "Relative Strength Index" not "RSI"
 - chart_scroll_to_date → jump to a date (ISO format)
+- chart_fit_to_prices → zoom to price range. Reset with chart_reset_view first to avoid centering bugs
+- chart_reset_view → reset price scale + time scale to default state
 - indicator_set_inputs → change indicator settings (length, source, etc.)
+- strategy_set_report_range → set Strategy Tester range (last_30_days, entire_history, custom) before fetching strategy results/trades
 
 Pine Script development:
 - pine_set_source → inject code, pine_smart_compile → compile + check errors

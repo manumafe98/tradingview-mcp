@@ -1,6 +1,6 @@
 # TradingView MCP — Claude Instructions
 
-83 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
+84 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
 
 ## Decision Tree — Which Tool When
 
@@ -37,8 +37,9 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 8. `get_screenshot_link` → shareable TradingView link (Alt+S clipboard)
 
 ### "Check my strategy performance"
+- `strategy_set_report_range` → set the Strategy Tester range first when the user asks for a specific period such as entire history
 - `data_get_strategy_results` → overall performance metrics
-- `data_get_trades` → individual trade list
+- `data_get_trades` → closed trade list from the active report; use `limit`/`offset` for large histories
 - `data_get_equity` → equity curve data
 
 ### "Change the chart"
@@ -48,6 +49,7 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `chart_manage_indicator` → add or remove studies (use full name: "Relative Strength Index", not "RSI")
 - `chart_scroll_to_date` → jump to a date (ISO format: "2025-01-15")
 - `chart_set_visible_range` → zoom to exact date range (unix timestamps)
+- `chart_reset_view` → reset price scale + time scale to default. Use before stacking `chart_fit_to_prices` calls
 - `chart_fit_to_prices` → zoom Y-axis to a price range + center X-axis around current bar
 - `chart_get_visible_range` → get current visible date and bar ranges
 
@@ -138,6 +140,7 @@ These tools can return large payloads. Follow these rules to avoid context bloat
 | `data_get_ohlcv` (summary) | ~500 bytes |
 | `data_get_ohlcv` (100 bars) | ~8 KB |
 | `capture_screenshot` | ~300 bytes (returns file path, not image data) |
+| `chart_reset_view` | ~80 bytes |
 | `chart_fit_to_prices` | ~300 bytes |
 
 ## Tool Conventions
