@@ -19,6 +19,15 @@ export function registerUiTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
+  server.tool('strategy_set_report_range', 'Set Strategy Tester report date range using TradingView UI automation', {
+    range: z.enum(['range_from_chart', 'last_7_days', 'last_30_days', 'last_90_days', 'last_365_days', 'entire_history', 'custom']).describe('Strategy Tester range preset'),
+    from: z.string().optional().describe('Custom start date in YYYY-MM-DD format (required when range=custom)'),
+    to: z.string().optional().describe('Custom end date in YYYY-MM-DD format (required when range=custom)'),
+  }, async ({ range, from, to }) => {
+    try { return jsonResult(await core.setStrategyReportRange({ range, from, to })); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
   server.tool('ui_fullscreen', 'Toggle TradingView fullscreen mode', {}, async () => {
     try { return jsonResult(await core.fullscreen()); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }

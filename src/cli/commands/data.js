@@ -1,5 +1,6 @@
 import { register } from '../router.js';
 import * as core from '../../core/data.js';
+import * as uiCore from '../../core/ui.js';
 
 register('quote', {
   description: 'Get real-time price quote',
@@ -65,9 +66,26 @@ register('data', {
     ['trades', {
       description: 'Get strategy trade list',
       options: {
-        max: { type: 'string', short: 'n', description: 'Max trades to return' },
+        limit: { type: 'string', short: 'n', description: 'Max closed trades to return (default 100, max 1000)' },
+        offset: { type: 'string', short: 'o', description: 'Closed trade offset for pagination (default 0)' },
+        max: { type: 'string', description: 'Deprecated alias for --limit' },
       },
-      handler: (opts) => core.getTrades({ max_trades: opts.max ? Number(opts.max) : undefined }),
+      handler: (opts) => core.getTrades({
+        limit: opts.limit ? Number(opts.limit) : undefined,
+        offset: opts.offset ? Number(opts.offset) : undefined,
+        max_trades: opts.max ? Number(opts.max) : undefined,
+      }),
+    }],
+    ['strategy-range', {
+      description: 'Set Strategy Tester report date range',
+      options: {
+        from: { type: 'string', description: 'Custom start date in YYYY-MM-DD format' },
+        to: { type: 'string', description: 'Custom end date in YYYY-MM-DD format' },
+      },
+      handler: (opts, positionals) => {
+        if (!positionals[0]) throw new Error('Range required. Usage: tv data strategy-range entire_history');
+        return uiCore.setStrategyReportRange({ range: positionals[0], from: opts.from, to: opts.to });
+      },
     }],
     ['equity', {
       description: 'Get strategy equity curve',
