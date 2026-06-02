@@ -4,9 +4,22 @@
 import { evaluate, evaluateAsync, KNOWN_PATHS, safeString } from '../connection.js';
 
 const MAX_OHLCV_BARS = 500;
-const MAX_TRADES = 20;
+export const DEFAULT_STRATEGY_TRADES_LIMIT = 100;
+export const MAX_STRATEGY_TRADES_LIMIT = 1000;
 const CHART_API = KNOWN_PATHS.chartApi;
 const BARS_PATH = KNOWN_PATHS.mainSeriesBars;
+
+export function normalizeTradePaging({ limit, offset, max_trades } = {}) {
+  const rawLimit = limit ?? max_trades ?? DEFAULT_STRATEGY_TRADES_LIMIT;
+  const rawOffset = offset ?? 0;
+  const parsedLimit = Number(rawLimit);
+  const parsedOffset = Number(rawOffset);
+  if (!Number.isFinite(parsedLimit)) throw new Error(`limit must be a finite number, got: ${rawLimit}`);
+  if (!Number.isFinite(parsedOffset)) throw new Error(`offset must be a finite number, got: ${rawOffset}`);
+  const normalizedLimit = Math.min(Math.max(Math.floor(parsedLimit), 1), MAX_STRATEGY_TRADES_LIMIT);
+  const normalizedOffset = Math.max(Math.floor(parsedOffset), 0);
+  return { limit: normalizedLimit, offset: normalizedOffset };
+}
 
 function buildGraphicsJS(collectionName, mapKey, filter) {
   return `
@@ -141,7 +154,7 @@ export async function getStrategyResults() {
         var strat = null;
         for (var i = 0; i < sources.length; i++) {
           var s = sources[i];
-          if (s.metaInfo && s.metaInfo().is_price_study === false && (s.reportData || s.performance)) { strat = s; break; }
+          if (s.metaInfo && s.metaInfo() && s.metaInfo().id && s.metaInfo().id.indexOf('StrategyScript$') === 0 && (s.reportData || s.performance)) { strat = s; break; }
         }
         if (!strat) return {metrics: {}, source: 'internal_api', error: 'No strategy found on chart. Add a strategy indicator first.'};
         var metrics = {};
@@ -164,8 +177,8 @@ export async function getStrategyResults() {
   return { success: true, metric_count: Object.keys(results?.metrics || {}).length, source: results?.source, metrics: results?.metrics || {}, error: results?.error };
 }
 
-export async function getTrades({ max_trades } = {}) {
-  const limit = Math.min(max_trades || 20, MAX_TRADES);
+export async function getTrades({ max_trades, limit, offset } = {}) {
+  const paging = normalizeTradePaging({ max_trades, limit, offset });
   const trades = await evaluate(`
     (function() {
       try {
@@ -174,31 +187,40 @@ export async function getTrades({ max_trades } = {}) {
         var strat = null;
         for (var i = 0; i < sources.length; i++) {
           var s = sources[i];
-          if (s.metaInfo && s.metaInfo().is_price_study === false && (s.ordersData || s.reportData)) { strat = s; break; }
+          if (s.metaInfo && s.metaInfo() && s.metaInfo().id && s.metaInfo().id.indexOf('StrategyScript$') === 0 && (s.ordersData || s.reportData)) { strat = s; break; }
         }
-        if (!strat) return {trades: [], source: 'internal_api', error: 'No strategy found on chart.'};
-        var orders = null;
-        if (strat.ordersData) { orders = typeof strat.ordersData === 'function' ? strat.ordersData() : strat.ordersData; if (orders && typeof orders.value === 'function') orders = orders.value(); }
-        if (!orders || !Array.isArray(orders)) {
-          if (strat._orders) orders = strat._orders;
-          else if (strat.tradesData) { orders = typeof strat.tradesData === 'function' ? strat.tradesData() : strat.tradesData; if (orders && typeof orders.value === 'function') orders = orders.value(); }
-        }
-        if (!orders || !Array.isArray(orders)) return {trades: [], source: 'internal_api', error: 'ordersData() returned non-array.'};
-        var result = [];
-        for (var t = 0; t < Math.min(orders.length, ${limit}); t++) {
-          var o = orders[t];
-          if (typeof o === 'object' && o !== null) {
-            var trade = {};
-            var okeys = Object.keys(o);
-            for (var k = 0; k < okeys.length; k++) { var v = o[okeys[k]]; if (v !== null && v !== undefined && typeof v !== 'function' && typeof v !== 'object') trade[okeys[k]] = v; }
-            result.push(trade);
-          }
-        }
-        return {trades: result, source: 'internal_api'};
-      } catch(e) { return {trades: [], source: 'internal_api', error: e.message}; }
+        if (!strat) return {trades: [], source: 'reportData.trades', error: 'No strategy found on chart.'};
+        if (!strat.reportData) return {trades: [], source: 'reportData.trades', error: 'Strategy reportData() is not available.'};
+        var rd = typeof strat.reportData === 'function' ? strat.reportData() : strat.reportData;
+        if (rd && typeof rd.value === 'function') rd = rd.value();
+        if (!rd || !Array.isArray(rd.trades)) return {trades: [], source: 'reportData.trades', error: 'reportData().trades returned non-array.'};
+        var total = rd.trades.length;
+        var start = Math.min(${paging.offset}, total);
+        var end = Math.min(start + ${paging.limit}, total);
+        return {
+          trades: rd.trades.slice(start, end),
+          total_trades: total,
+          date_range: rd.settings && rd.settings.dateRange ? rd.settings.dateRange : null,
+          source: 'reportData.trades'
+        };
+      } catch(e) { return {trades: [], source: 'reportData.trades', error: e.message}; }
     })()
   `);
-  return { success: true, trade_count: trades?.trades?.length || 0, source: trades?.source, trades: trades?.trades || [], error: trades?.error };
+  const returned = trades?.trades?.length || 0;
+  const total = trades?.total_trades ?? 0;
+  return {
+    success: true,
+    trade_count: returned,
+    returned,
+    total_trades: total,
+    offset: paging.offset,
+    limit: paging.limit,
+    has_more: paging.offset + returned < total,
+    source: trades?.source,
+    date_range: trades?.date_range || null,
+    trades: trades?.trades || [],
+    error: trades?.error,
+  };
 }
 
 export async function getEquity() {
@@ -210,7 +232,7 @@ export async function getEquity() {
         var strat = null;
         for (var i = 0; i < sources.length; i++) {
           var s = sources[i];
-          if (s.metaInfo && s.metaInfo().is_price_study === false && (s.reportData || s.performance)) { strat = s; break; }
+          if (s.metaInfo && s.metaInfo() && s.metaInfo().id && s.metaInfo().id.indexOf('StrategyScript$') === 0 && (s.reportData || s.performance)) { strat = s; break; }
         }
         if (!strat) return {data: [], source: 'internal_api', error: 'No strategy found on chart.'};
         var data = [];

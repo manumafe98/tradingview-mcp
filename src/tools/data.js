@@ -24,9 +24,11 @@ export function registerDataTools(server) {
   });
 
   server.tool('data_get_trades', 'Get trade list from Strategy Tester', {
-    max_trades: z.coerce.number().optional().describe('Maximum trades to return'),
-  }, async ({ max_trades }) => {
-    try { return jsonResult(await core.getTrades({ max_trades })); }
+    limit: z.coerce.number().optional().describe('Maximum closed trades to return (default 100, max 1000)'),
+    offset: z.coerce.number().optional().describe('Closed trade offset for pagination (default 0)'),
+    max_trades: z.coerce.number().optional().describe('Deprecated alias for limit'),
+  }, async ({ limit, offset, max_trades }) => {
+    try { return jsonResult(await core.getTrades({ limit, offset, max_trades })); }
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 

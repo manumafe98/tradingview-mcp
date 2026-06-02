@@ -78,6 +78,19 @@ describe('CLI — help and routing', () => {
     assert.ok(stdout.includes('--count'));
     assert.ok(stdout.includes('--summary'));
   });
+
+  it('data --help shows strategy range command', () => {
+    const { stdout, exitCode } = run(['data', '--help']);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes('strategy-range'));
+  });
+
+  it('data trades --help shows pagination options', () => {
+    const { stdout, exitCode } = run(['data', 'trades', '--help']);
+    assert.equal(exitCode, 0);
+    assert.ok(stdout.includes('--limit'));
+    assert.ok(stdout.includes('--offset'));
+  });
 });
 
 describe('CLI — pine analyze (offline)', () => {
