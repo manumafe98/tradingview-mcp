@@ -266,6 +266,19 @@ export async function fitToPrices({ min_price, max_price, center_price, y_multip
   };
 }
 
+export async function resetView({ _deps }) {
+  const { evaluate } = _resolve(_deps);
+  await evaluate(`
+    (function() {
+      var chart = ${CHART_API};
+      var cw = chart._chartWidget;
+      cw._actions.chartReset._hotkeyAction.handler();
+      cw._actions.timeScaleReset._hotkeyAction.handler();
+    })()
+  `);
+  return { success: true };
+}
+
 export async function symbolSearch({ query, type }) {
   // Use TradingView's public symbol search REST API (works without auth)
   const params = new URLSearchParams({

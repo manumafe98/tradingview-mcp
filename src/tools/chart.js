@@ -76,6 +76,11 @@ export function registerChartTools(server) {
     catch (err) { return jsonResult({ success: false, error: err.message }, true); }
   });
 
+  server.tool('chart_reset_view', 'Reset the chart view (price scale + time scale) to default state. Use before chart_fit_to_prices when stacking multiple zooms to avoid centering bugs.', {}, async () => {
+    try { return jsonResult(await core.resetView()); }
+    catch (err) { return jsonResult({ success: false, error: err.message }, true); }
+  });
+
   server.tool('symbol_search', 'Search for symbols by name or keyword', {
     query: z.string().describe('Search query (e.g., "AAPL", "crude oil", "ES")'),
     type: z.string().optional().describe('Filter by type (e.g., "stock", "futures", "crypto", "forex")'),
